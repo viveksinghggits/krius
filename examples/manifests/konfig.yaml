@@ -1,0 +1,7 @@
+apiVersion: krius.dev/v1alpha1
+kind: Konfig
+metadata:
+  name: testone
+spec:
+  data:
+    name: vivek
