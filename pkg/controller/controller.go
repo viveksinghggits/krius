@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	kriusv1alpha1 "github.com/viveksinghggits/krius/pkg/apis/krius.dev/v1alpha1"
@@ -11,6 +12,7 @@ import (
 	skeme "github.com/viveksinghggits/krius/pkg/client/clientset/versioned/scheme"
 	koninformer "github.com/viveksinghggits/krius/pkg/client/informers/externalversions/krius.dev/v1alpha1"
 	klisters "github.com/viveksinghggits/krius/pkg/client/listers/krius.dev/v1alpha1"
+	"github.com/viveksinghggits/krius/pkg/util"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -156,12 +158,46 @@ func (c *Controller) SyncKonfig(key string) error {
 	ctx := context.Background()
 	secretData := kon.Spec.Data
 	// iterate over namespaces create secret
+	if err := c.createKonfigs(ctx, kon, secretData); err != nil {
+		return err
+	}
+
+	if err := c.updateKonfigStatus(ctx, kon, "Success"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *Controller) getNonSystemNSs(ctx context.Context, kon *kriusv1alpha1.Konfig) ([]corev1.Namespace, error) {
 	namespaces, err := c.kubeclient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	if metav1.HasAnnotation(kon.ObjectMeta, util.IncludeKubeSysNSAnn) {
+		log.Println("Annotation is not found")
+		return namespaces.Items, nil
+	}
+
+	var nss []corev1.Namespace
+	for _, ns := range namespaces.Items {
+		if !strings.HasPrefix(ns.Name, util.SystemNSsPrefix) {
+			nss = append(nss, ns)
+		}
+	}
+	return nss, nil
+}
+
+func (c *Controller) createKonfigs(ctx context.Context, kon *kriusv1alpha1.Konfig, data map[string]string) error {
+
+	var err error
+	nss, err := c.getNonSystemNSs(ctx, kon)
 	if err != nil {
 		return err
 	}
 
-	for _, ns := range namespaces.Items {
+	for _, ns := range nss {
 		_, err := c.kubeclient.CoreV1().ConfigMaps(ns.Name).Get(ctx, kon.Name, metav1.GetOptions{})
 		if errors.IsNotFound(err) {
 			konf := &corev1.ConfigMap{
@@ -172,7 +208,7 @@ func (c *Controller) SyncKonfig(key string) error {
 						*metav1.NewControllerRef(kon, kriusv1alpha1.SchemeGroupVersion.WithKind("Konfig")),
 					},
 				},
-				Data: secretData,
+				Data: data,
 			}
 			_, err = c.kubeclient.CoreV1().ConfigMaps(ns.Name).Create(ctx, konf, metav1.CreateOptions{})
 			if err != nil {
@@ -187,11 +223,6 @@ func (c *Controller) SyncKonfig(key string) error {
 			return err
 		}
 	}
-
-	if err := c.updateKonfigStatus(ctx, kon, "Success"); err != nil {
-		return err
-	}
-
 	return nil
 }
 

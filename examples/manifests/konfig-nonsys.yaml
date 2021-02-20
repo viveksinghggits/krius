@@ -1,9 +1,7 @@
 apiVersion: krius.dev/v1alpha1
 kind: Konfig
 metadata:
-  name: testone
-  annotations:
-    krius.dev/includesystemns: "true"
+  name: testtwo
 spec:
   data:
     name: vivek
