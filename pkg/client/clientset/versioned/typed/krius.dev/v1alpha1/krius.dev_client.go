@@ -27,6 +27,7 @@ import (
 type KriusV1alpha1Interface interface {
 	RESTClient() rest.Interface
 	KonfigsGetter
+	SekretsGetter
 }
 
 // KriusV1alpha1Client is used to interact with features provided by the krius.dev group.
@@ -36,6 +37,10 @@ type KriusV1alpha1Client struct {
 
 func (c *KriusV1alpha1Client) Konfigs(namespace string) KonfigInterface {
 	return newKonfigs(c, namespace)
+}
+
+func (c *KriusV1alpha1Client) Sekrets(namespace string) SekretInterface {
+	return newSekrets(c, namespace)
 }
 
 // NewForConfig creates a new KriusV1alpha1Client for the given config.
