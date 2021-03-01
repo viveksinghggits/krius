@@ -1,0 +1,8 @@
+apiVersion: krius.dev/v1alpha1
+kind: Sekret
+metadata:
+  name: testone
+spec:
+  type: generic
+  data:
+    name: vivek

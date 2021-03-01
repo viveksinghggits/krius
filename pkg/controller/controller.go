@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"strings"
@@ -10,8 +11,8 @@ import (
 	kriusv1alpha1 "github.com/viveksinghggits/krius/pkg/apis/krius.dev/v1alpha1"
 	kclientcmd "github.com/viveksinghggits/krius/pkg/client/clientset/versioned"
 	skeme "github.com/viveksinghggits/krius/pkg/client/clientset/versioned/scheme"
-	koninformer "github.com/viveksinghggits/krius/pkg/client/informers/externalversions/krius.dev/v1alpha1"
-	klisters "github.com/viveksinghggits/krius/pkg/client/listers/krius.dev/v1alpha1"
+	crinformer "github.com/viveksinghggits/krius/pkg/client/informers/externalversions/krius.dev/v1alpha1"
+	crlisters "github.com/viveksinghggits/krius/pkg/client/listers/krius.dev/v1alpha1"
 	"github.com/viveksinghggits/krius/pkg/util"
 
 	corev1 "k8s.io/api/core/v1"
@@ -31,10 +32,11 @@ type Controller struct {
 	kubeclient kubernetes.Interface
 	konclient  kclientcmd.Interface
 
-	konlister klisters.KonfigLister
-
+	konlister    crlisters.KonfigLister
 	konfigSynced cache.InformerSynced
 
+	seklister crlisters.SekretLister
+	sekSynced cache.InformerSynced
 	// workqueue is a rate limited work queue. This is used to queue work
 	// to be processed instead of performing it as soon  as change happen
 	workqueue workqueue.RateLimitingInterface
@@ -43,7 +45,7 @@ type Controller struct {
 	recorder record.EventRecorder
 }
 
-func NewController(kubeclientset kubernetes.Interface, konclientset kclientcmd.Interface, kinformer koninformer.KonfigInformer) *Controller {
+func NewController(kubeclientset kubernetes.Interface, konclientset kclientcmd.Interface, kinformer crinformer.KonfigInformer, sekinformer crinformer.SekretInformer) *Controller {
 	// add controller types to the scheme
 	// so that event can be recoreded for these types
 	uruntime.Must(skeme.AddToScheme(scheme.Scheme))
@@ -59,17 +61,27 @@ func NewController(kubeclientset kubernetes.Interface, konclientset kclientcmd.I
 		kubeclient:   kubeclientset,
 		konclient:    konclientset,
 		konlister:    kinformer.Lister(),
-		workqueue:    workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "Konfigs"),
+		workqueue:    workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "konsek"),
 		konfigSynced: kinformer.Informer().HasSynced,
+		seklister:    sekinformer.Lister(),
+		sekSynced:    sekinformer.Informer().HasSynced,
 		recorder:     recorder,
 	}
 
+	// add events for konfig resource
 	kinformer.Informer().AddEventHandler(
 		cache.ResourceEventHandlerFuncs{
 			AddFunc: controller.enqueueAddEvent,
-			UpdateFunc: func(old, new interface{}) {
-				controller.enqueueUpdateEvent(new)
-			},
+			// UpdateFunc: func(old, new interface{}) {
+			// 	controller.enqueueUpdateEvent(new)
+			// },
+		},
+	)
+
+	// add event for sekret resources
+	sekinformer.Informer().AddEventHandler(
+		cache.ResourceEventHandlerFuncs{
+			AddFunc: controller.enqueueAddEvent,
 		},
 	)
 
@@ -102,12 +114,11 @@ func (c *Controller) runWorker() {
 }
 
 func (c *Controller) processNextWorkItem() bool {
-	fmt.Println("ProcessNextItem")
 	obj, shutdown := c.workqueue.Get()
 	if shutdown {
 		return false
 	}
-
+	log.Printf("obejct that we got from queue %+v\n", obj)
 	err := func(o interface{}) error {
 		defer c.workqueue.Done(obj)
 		var key string
@@ -119,14 +130,29 @@ func (c *Controller) processNextWorkItem() bool {
 			return nil
 		}
 
-		if err := c.SyncKonfig(key); err != nil {
-			// was not successful, add again to the queue
-			c.workqueue.AddRateLimited(key)
-			uruntime.HandleError(fmt.Errorf("error syncing '%s': %s requeueing", key, err.Error()))
-			return nil
+		// since we have added kind as well in the key, let's split that
+		s := strings.Split(key, ":")
+		log.Printf("s that we have is %+v\n", s)
+		switch s[1] {
+		case "konfig":
+			if err := c.SyncKonfig(s[0]); err != nil {
+				// was not successful, add again to the queue
+				c.workqueue.AddRateLimited(key)
+				uruntime.HandleError(fmt.Errorf("error syncing '%s': %s requeueing", key, err.Error()))
+				return nil
+			}
+			c.workqueue.Forget(key)
+			fmt.Printf("Successfully synced %+v\n", key)
+		case "sekret":
+			if err := c.SyncSekret(s[0]); err != nil {
+				c.workqueue.AddRateLimited(key)
+				uruntime.HandleError(fmt.Errorf("error syncing '%s': %s requeueing", key, err.Error()))
+				return nil
+			}
+			c.workqueue.Forget(key)
+			fmt.Printf("Successfully synced %+v\n", key)
 		}
-		c.workqueue.Forget(key)
-		fmt.Printf("Successfully synced %+v\n", key)
+
 		return nil
 	}(obj)
 
@@ -138,7 +164,91 @@ func (c *Controller) processNextWorkItem() bool {
 	return true
 }
 
+func (c *Controller) SyncSekret(key string) error {
+	log.Println("syncsekret was called")
+	namespace, name, err := cache.SplitMetaNamespaceKey(key)
+	if err != nil {
+		uruntime.HandleError(fmt.Errorf("invalid resource key : %s", key))
+		return nil
+	}
+
+	// get the sekret resource that was created
+	sek, err := c.seklister.Sekrets(namespace).Get(name)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			uruntime.HandleError(fmt.Errorf("sekret '%s', that was in workqueue but doesn't exist in cluster anymore", sek.Name))
+			return nil
+		}
+		return err
+	}
+
+	ctx := context.Background()
+	if err := c.createSekrets(ctx, sek); err != nil {
+		return err
+	}
+
+	if err := c.updateSekretStatus(ctx, sek); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *Controller) createSekrets(ctx context.Context, s *kriusv1alpha1.Sekret) error {
+	var err error
+	nss, err := c.getNonSystemNSs(ctx, s.ObjectMeta)
+	if err != nil {
+		return err
+	}
+
+	for _, ns := range nss {
+		_, err := c.kubeclient.CoreV1().Secrets(ns.Name).Get(ctx, s.Name, metav1.GetOptions{})
+		if errors.IsNotFound(err) {
+			sec := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      s.Name,
+					Namespace: ns.Name,
+					OwnerReferences: []metav1.OwnerReference{
+						*metav1.NewControllerRef(s, kriusv1alpha1.SchemeGroupVersion.WithKind("Sekret")),
+					},
+				},
+				Data: formSecretData(s.Spec.Data),
+				Type: s.Spec.Type,
+			}
+			_, err = c.kubeclient.CoreV1().Secrets(ns.Name).Create(ctx, sec, metav1.CreateOptions{})
+			if err != nil {
+				c.recorder.Event(sec, corev1.EventTypeWarning, "Not Synced", fmt.Sprintf("Error syncing Sekret to the namespace %s", ns.Name))
+				return err
+			}
+			// update the event
+			c.recorder.Event(s, corev1.EventTypeNormal, "Synced", fmt.Sprintf("to the namespace %s", ns.Name))
+		}
+
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func formSecretData(plain map[string]string) map[string][]byte {
+	decoded := map[string][]byte{}
+	for k, v := range plain {
+		decoded[k] = []byte(base64.StdEncoding.EncodeToString([]byte(v)))
+	}
+	return decoded
+}
+
+func (c *Controller) updateSekretStatus(ctx context.Context, s *kriusv1alpha1.Sekret) error {
+	sek := s.DeepCopy()
+	sek.Status.Synced = true
+	_, err := c.konclient.KriusV1alpha1().Sekrets(s.Namespace).Update(ctx, sek, metav1.UpdateOptions{})
+	return err
+}
+
 func (c *Controller) SyncKonfig(key string) error {
+	log.Printf("SyncKonfig wa called with key %s\n", key)
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		uruntime.HandleError(fmt.Errorf("invalid resource key : %s", key))
@@ -156,26 +266,27 @@ func (c *Controller) SyncKonfig(key string) error {
 	}
 
 	ctx := context.Background()
-	secretData := kon.Spec.Data
+	kData := kon.Spec.Data
 	// iterate over namespaces create secret
-	if err := c.createKonfigs(ctx, kon, secretData); err != nil {
+	// TODO: @viveksinghggits, we can just pass kon from here
+	if err := c.createKonfigs(ctx, kon, kData); err != nil {
 		return err
 	}
 
-	if err := c.updateKonfigStatus(ctx, kon, "Success"); err != nil {
+	if err := c.updateKonfigStatus(ctx, kon); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (c *Controller) getNonSystemNSs(ctx context.Context, kon *kriusv1alpha1.Konfig) ([]corev1.Namespace, error) {
+func (c *Controller) getNonSystemNSs(ctx context.Context, objectMeta metav1.ObjectMeta) ([]corev1.Namespace, error) {
 	namespaces, err := c.kubeclient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
 
-	if metav1.HasAnnotation(kon.ObjectMeta, util.IncludeKubeSysNSAnn) {
+	if metav1.HasAnnotation(objectMeta, util.IncludeKubeSysNSAnn) {
 		log.Println("Annotation is not found")
 		return namespaces.Items, nil
 	}
@@ -190,9 +301,8 @@ func (c *Controller) getNonSystemNSs(ctx context.Context, kon *kriusv1alpha1.Kon
 }
 
 func (c *Controller) createKonfigs(ctx context.Context, kon *kriusv1alpha1.Konfig, data map[string]string) error {
-
 	var err error
-	nss, err := c.getNonSystemNSs(ctx, kon)
+	nss, err := c.getNonSystemNSs(ctx, kon.ObjectMeta)
 	if err != nil {
 		return err
 	}
@@ -226,15 +336,14 @@ func (c *Controller) createKonfigs(ctx context.Context, kon *kriusv1alpha1.Konfi
 	return nil
 }
 
-func (c *Controller) updateKonfigStatus(ctx context.Context, k *kriusv1alpha1.Konfig, msg string) error {
+func (c *Controller) updateKonfigStatus(ctx context.Context, k *kriusv1alpha1.Konfig) error {
 	kcopy := k.DeepCopy()
 	kcopy.Status.Synced = true
-	log.Printf("Before updating the konfig status %+v", kcopy)
-	updatedk, err := c.konclient.KriusV1alpha1().Konfigs(k.Namespace).Update(ctx, kcopy, metav1.UpdateOptions{})
+
+	_, err := c.konclient.KriusV1alpha1().Konfigs(k.Namespace).Update(ctx, kcopy, metav1.UpdateOptions{})
 	if err != nil {
 		log.Printf("error is %s", err.Error())
 	}
-	log.Printf("updated kon is %+v", updatedk)
 	return err
 }
 
@@ -249,11 +358,27 @@ func (c *Controller) enqueueUpdateEvent(obj interface{}) {
 }
 
 func (c *Controller) enqueueAddEvent(obj interface{}) {
+	log.Printf("enqueue Add event was called with %+v\n", obj)
 	var key string
 	var err error
 	if key, err = cache.MetaNamespaceKeyFunc(obj); err != nil {
 		uruntime.HandleError(err)
 		return
 	}
-	c.workqueue.Add(key)
+
+	var kind string
+
+	switch a := obj.(type) {
+	case *kriusv1alpha1.Konfig:
+		kind = "konfig"
+	case *kriusv1alpha1.Sekret:
+		kind = "sekret"
+	default:
+		log.Printf("Expecting type konfig or sekret but got %+v\n", a)
+	}
+
+	// namespace/name:kind
+	// Konfig, Sekret
+	// this doesn't look good, we will have to change this so that we can figure out type without adding type here
+	c.workqueue.Add(fmt.Sprintf("%s:%s", key, kind))
 }
