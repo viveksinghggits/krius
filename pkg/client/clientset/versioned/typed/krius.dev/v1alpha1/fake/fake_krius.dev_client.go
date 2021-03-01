@@ -32,6 +32,10 @@ func (c *FakeKriusV1alpha1) Konfigs(namespace string) v1alpha1.KonfigInterface {
 	return &FakeKonfigs{c, namespace}
 }
 
+func (c *FakeKriusV1alpha1) Sekrets(namespace string) v1alpha1.SekretInterface {
+	return &FakeSekrets{c, namespace}
+}
+
 // RESTClient returns a RESTClient that is used to communicate
 // with API server by this client implementation.
 func (c *FakeKriusV1alpha1) RESTClient() rest.Interface {

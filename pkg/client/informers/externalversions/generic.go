@@ -55,6 +55,8 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 	// Group=krius.dev, Version=v1alpha1
 	case v1alpha1.SchemeGroupVersion.WithResource("konfigs"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Krius().V1alpha1().Konfigs().Informer()}, nil
+	case v1alpha1.SchemeGroupVersion.WithResource("sekrets"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Krius().V1alpha1().Sekrets().Informer()}, nil
 
 	}
 

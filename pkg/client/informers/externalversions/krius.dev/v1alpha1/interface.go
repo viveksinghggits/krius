@@ -26,6 +26,8 @@ import (
 type Interface interface {
 	// Konfigs returns a KonfigInformer.
 	Konfigs() KonfigInformer
+	// Sekrets returns a SekretInformer.
+	Sekrets() SekretInformer
 }
 
 type version struct {
@@ -42,4 +44,9 @@ func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakList
 // Konfigs returns a KonfigInformer.
 func (v *version) Konfigs() KonfigInformer {
 	return &konfigInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// Sekrets returns a SekretInformer.
+func (v *version) Sekrets() SekretInformer {
+	return &sekretInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }

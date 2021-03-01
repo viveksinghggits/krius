@@ -36,6 +36,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		SchemeGroupVersion,
 		&Konfig{},
 		&KonfigList{},
+		&Sekret{},
+		&SekretList{},
 	)
 
 	scheme.AddKnownTypes(

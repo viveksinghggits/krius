@@ -25,3 +25,11 @@ type KonfigListerExpansion interface{}
 // KonfigNamespaceListerExpansion allows custom methods to be added to
 // KonfigNamespaceLister.
 type KonfigNamespaceListerExpansion interface{}
+
+// SekretListerExpansion allows custom methods to be added to
+// SekretLister.
+type SekretListerExpansion interface{}
+
+// SekretNamespaceListerExpansion allows custom methods to be added to
+// SekretNamespaceLister.
+type SekretNamespaceListerExpansion interface{}

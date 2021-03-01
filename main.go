@@ -44,7 +44,7 @@ func main() {
 
 	stopCh := make(chan struct{})
 
-	c := controller.NewController(kubeclient, kcs, konfigInfFactory.Krius().V1alpha1().Konfigs())
+	c := controller.NewController(kubeclient, kcs, konfigInfFactory.Krius().V1alpha1().Konfigs(), konfigInfFactory.Krius().V1alpha1().Sekrets())
 	konfigInfFactory.Start(stopCh)
 
 	if err = c.Run(2, stopCh); err != nil {
